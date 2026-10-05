@@ -30,7 +30,6 @@ class SyncAgentConfigsTests(unittest.TestCase):
             "---\nname: demo-skill\ndescription: Demo skill\n---\n\n# Demo\n",
             encoding="utf-8",
         )
-        (self.root / ".agents" / "skills" / "demo-skill" / "notes.txt").write_text("hello\n", encoding="utf-8")
         (self.root / ".agents" / "plan.agent.md").write_text("---\nname: plan\n---\n", encoding="utf-8")
         (self.root / ".agents" / "mcp.json").write_text(
             json.dumps({"servers": {"docs": {"type": "http", "url": "https://example.test/mcp"}}}),
@@ -48,42 +47,40 @@ class SyncAgentConfigsTests(unittest.TestCase):
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
-    def test_opencode_uses_native_skill_report_and_generates_config(self) -> None:
-        ops = self.module.target_operations("opencode")
-        skill_ops = [op for op in ops if op.category == "skills"]
-        self.assertTrue(skill_ops)
-        self.assertTrue(all(op.status == "native" for op in skill_ops))
-        config_op = next(op for op in ops if op.destination == self.root / "opencode.jsonc")
-        self.assertEqual(config_op.status, "planned")
-        self.assertIn('"instructions": [', config_op.content)
+    def test_supported_targets_are_copilot_and_codex(self) -> None:
+        self.assertEqual(self.module.TARGETS, ("copilot", "codex"))
 
-    def test_cursor_generates_rule_and_mcp_wrapper(self) -> None:
-        ops = self.module.target_operations("cursor")
-        rule = next(op for op in ops if op.destination == self.root / ".cursor" / "rules" / "agents-and-skills-index.mdc")
-        self.assertEqual(rule.status, "planned")
-        self.assertIn("demo-skill", rule.content)
-        mcp = next(op for op in ops if op.destination == self.root / ".cursor" / "mcp.json")
-        self.assertEqual(mcp.json_data["mcpServers"]["docs"]["url"], "https://example.test/mcp")
+    def test_copilot_generates_agents_mcp_and_uses_canonical_skills(self) -> None:
+        ops = self.module.target_operations("copilot")
+        agent = next(op for op in ops if op.destination == self.root / ".github" / "agents" / "plan.agent.md")
+        self.assertEqual(agent.status, "planned")
+        self.assertTrue(agent.content.startswith("<!-- Managed by sync-agent-config;"))
+        mcp = next(op for op in ops if op.destination == self.root / ".vscode" / "mcp.json")
+        self.assertEqual(mcp.json_data["servers"]["docs"]["url"], "https://example.test/mcp")
+        skills = [op for op in ops if op.category == "skills"]
+        self.assertTrue(skills)
+        self.assertTrue(all(op.status == "native" for op in skills))
 
-    def test_unmanaged_conflict_is_reported(self) -> None:
-        target = self.root / ".claude" / "agents" / "plan.md"
+    def test_codex_uses_canonical_agents_and_skills(self) -> None:
+        ops = self.module.target_operations("codex")
+        actual = {op.category: op.status for op in ops}
+        expected = {"agents": "degraded", "skills": "native", "mcp": "degraded"}
+        self.assertEqual(actual, expected)
+
+    def test_unmanaged_copilot_agent_conflict_is_reported(self) -> None:
+        target = self.root / ".github" / "agents" / "plan.agent.md"
         target.parent.mkdir(parents=True)
         target.write_text("manual\n", encoding="utf-8")
-        ops = self.module.target_operations("claude")
+        ops = self.module.target_operations("copilot")
         op = next(op for op in ops if op.destination == target)
         self.assertEqual(op.status, "conflict")
 
-    def test_markdown_copy_contains_managed_header(self) -> None:
-        ops = self.module.target_operations("droid")
-        op = next(op for op in ops if op.destination == self.root / ".factory" / "droids" / "plan.md")
-        self.assertTrue(op.content.startswith("<!-- Managed by sync-agent-config;"))
-
     def test_validate_detects_drift(self) -> None:
-        ops = self.module.target_operations("claude")
+        ops = self.module.target_operations("copilot")
         planned = [op for op in ops if op.status == "planned"]
         for op in planned:
             self.module.write_operation(op)
-        agent_target = self.root / ".claude" / "agents" / "plan.md"
+        agent_target = self.root / ".github" / "agents" / "plan.agent.md"
         agent_target.write_text("tampered\n", encoding="utf-8")
         drift = [self.module.validate_operation(op) for op in planned]
         self.assertTrue(any(msg and "drift detected" in msg for msg in drift))
