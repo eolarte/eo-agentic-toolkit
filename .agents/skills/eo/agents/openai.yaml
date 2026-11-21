@@ -1,0 +1,4 @@
+interface:
+  display_name: "EO subagents"
+  short_description: "Delegate a task to the named EO subagents"
+  default_prompt: "Use $eo to complete the current task with the appropriate named eo- subagents."
